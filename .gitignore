@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# 環境變數與機密
+.env
+.env.*
+!.env.example
+
+# 其他
+.DS_Store
+Thumbs.db
+*.log
+.claude/settings.local.json

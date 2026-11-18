@@ -36,9 +36,3 @@ export function envelopeSchema<T extends z.ZodType>(data: T) {
     warnings: z.array(z.string()),
   });
 }
-
-/** 以台灣時區（+08:00）輸出 ISO 8601 時間戳記。 */
-export function taipeiTimestamp(now: Date = new Date()): string {
-  const shifted = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  return shifted.toISOString().replace(/\.\d{3}Z$/, '+08:00');
-}

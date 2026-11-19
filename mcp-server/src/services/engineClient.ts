@@ -5,11 +5,13 @@ import {
   stockHistoryEnvelope,
   stockInfoEnvelope,
   stockPriceEnvelope,
+  technicalIndicatorsEnvelope,
   type InstitutionalFlowResult,
   type MarketSummaryResult,
   type StockHistoryResult,
   type StockInfoResult,
   type StockPriceResult,
+  type TechnicalIndicatorsResult,
 } from '../schemas/stock.js';
 
 export const DEFAULT_ENGINE_URL = 'http://127.0.0.1:8000';
@@ -57,6 +59,10 @@ export interface EngineApi {
   getStockHistory(stockId: string, query: DateRange & { period?: string }): Promise<StockHistoryResult>;
   getInstitutionalFlow(stockId: string, query: DateRange): Promise<InstitutionalFlowResult>;
   getMarketSummary(market: string): Promise<MarketSummaryResult>;
+  getTechnicalIndicators(
+    stockId: string,
+    query: DateRange & { period?: string; indicators?: string[] },
+  ): Promise<TechnicalIndicatorsResult>;
 }
 
 export interface EngineClientOptions {
@@ -116,10 +122,16 @@ export class EngineClient implements EngineApi {
     return this.get(['market', market, 'summary'], {}, marketSummaryEnvelope);
   }
 
+  getTechnicalIndicators(stockId: string, query: DateRange & { period?: string; indicators?: string[] }) {
+    return this.get(['stocks', stockId, 'indicators'], query, technicalIndicatorsEnvelope);
+  }
+
   private async get<T>(segments: string[], query: object, schema: z.ZodType<T>): Promise<T> {
     const url = new URL(segments.map(encodeURIComponent).join('/'), this.baseUrl);
     for (const [key, value] of Object.entries(query)) {
-      if (value !== undefined) url.searchParams.set(key, String(value));
+      if (value === undefined) continue;
+      // 陣列以重複的參數送出（?indicators=MA5&indicators=MACD）
+      for (const item of Array.isArray(value) ? value : [value]) url.searchParams.append(key, String(item));
     }
 
     let response: Response;

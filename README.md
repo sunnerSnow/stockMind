@@ -13,7 +13,7 @@
 | M1 | 最小 MCP Server、`get_stock_info` | 完成 |
 | M2 | Python Financial Engine（FastAPI）、TWSE／TPEx 基本資料來源、MCP 串接 | 完成 |
 | M3 | 最新行情、歷史行情、三大法人、大盤概況 | 完成 |
-| M4 | 技術指標 MA／RSI／MACD | 未開始 |
+| M4 | 技術指標 MA／RSI／MACD | 完成 |
 | M5 | Resources、Prompts、Claude Desktop 整合 | 未開始 |
 | M6 | PostgreSQL、Docker、CI | 未開始 |
 
@@ -45,6 +45,7 @@ TWSE／TPEx 官方公開資料
 | `get_stock_history` | 指定期間的日 K，最多 366 天 | TWSE／TPEx 盤後資訊 |
 | `get_institutional_flow` | 三大法人每日買賣超，加上累計、連續天數、方向一致性，最多 31 天 | TWSE／TPEx 盤後資訊 |
 | `get_market_summary` | 大盤概況：加權指數或櫃買指數、漲跌、近 10 日收盤 | TWSE／TPEx OpenAPI |
+| `get_technical_indicators` | 技術指標：MA、RSI、MACD，含公式、參數、最新值與每日數值 | 由歷史日 K 計算 |
 
 所有 Tool 都是唯讀查詢。成功回應的統一格式：
 
@@ -109,6 +110,20 @@ TWSE／TPEx 官方公開資料
 - `streaks` 是截至最近一個有資料的交易日，同方向連續的天數；遇到持平或沒資料的日子就停止。
 - `latest_alignment` 是最近一日外資、投信、自營商是否同為買超或同為賣超。
 
+**技術指標**
+
+| 指標 | 名稱 | 公式 | 最少筆數 |
+|---|---|---|---|
+| 簡單移動平均 | `MA2`–`MA120` | 最近 N 個交易日收盤價的算術平均 | N |
+| RSI | `RSI2`–`RSI30` | Wilder 平滑法：以前 N 個漲跌的簡單平均起算，之後 平均 = (前一日平均 × (N − 1) + 當日值) ÷ N；RSI = 100 − 100 ÷ (1 + 平均漲幅 ÷ 平均跌幅) | N + 1 |
+| MACD | `MACD` | DIF = EMA12 − EMA26；訊號線 = DIF 的 EMA9；柱狀體 = DIF − 訊號線（不乘以 2）。EMA 以前 N 筆的簡單平均起算，平滑係數 2 ÷ (N + 1) | 34 |
+
+- 一律以未還原收盤價計算，數值四捨五入到小數第四位。沒有成交的交易日會略過。
+- RSI 與 MACD 是遞迴平滑，結果會受起算點影響。Engine 會自動往前多取一段暖機期（MACD 多取 100 筆、RSI 多取 7N 筆），讓起算值的殘餘權重低於千分之一，所以查詢區間第一天就有穩定的值。上市櫃時間不夠久、湊不滿暖機期時，數值仍會算出來，但會在 `warnings` 註明尚未收斂。
+- 同名指標在不同看盤軟體的起算方式不盡相同，數值可能有些微差異；每個指標的回應都附上實際使用的公式與參數。
+- 每個指標有 `status`：`ok` 表示最新一日有完整數值；`insufficient_data` 表示收盤價筆數不足（例如剛上市）；`undefined` 表示資料足夠但數學上無定義（例如期間內價格完全沒動的 RSI）。後兩者的數值是 `null`。
+- 計算函式在 `financial-engine/app/indicators/core.py`，測試除了手算的小例子，也用 pandas 以另一種寫法逐點比對。
+
 **沒有資料時**
 
 - 沒有成交、來源未提供、或無法比較（例如除權息日的漲跌）的欄位是 `null`，不會填 0 或估計值，並在 `warnings` 說明。
@@ -121,7 +136,7 @@ TWSE／TPEx 官方公開資料
 
 - 當日行情、指數在記憶體快取 5 分鐘，公司基本資料 6 小時。
 - 已經結束的月份、已經過去的交易日不會再變，會另存到 `financial-engine/.cache`，重啟後仍可用。來源回「查無資料」時不存磁碟，避免暫時性的缺漏被永久記住。
-- 對交易所網站的請求有節流（預設間隔 1.5 秒）。歷史行情一次抓一個月、三大法人一次抓一天，所以首次查詢較慢：一年的日 K 約 20 秒，一個月的三大法人約一分鐘；之後走快取，不到一秒。
+- 對交易所網站的請求有節流（預設間隔 1.5 秒）。歷史行情一次抓一個月、三大法人一次抓一天，所以首次查詢較慢：一年的日 K 約 20 秒，一個月的三大法人約一分鐘，含 MACD 的技術指標約 15 秒；之後走快取，不到一秒。
 - 其中一個市場的來源失敗時，另一個市場仍可查；但查不到的代號會回 `UPSTREAM_ERROR` 而不是 `STOCK_NOT_FOUND`。
 
 ## 本機開發
@@ -145,6 +160,7 @@ curl http://127.0.0.1:8000/stocks/2330/price
 curl "http://127.0.0.1:8000/stocks/2330/history?period=3mo"
 curl "http://127.0.0.1:8000/stocks/2330/institutional-flow?start_date=2026-11-02&end_date=2026-11-17"
 curl http://127.0.0.1:8000/market/TWSE/summary
+curl "http://127.0.0.1:8000/stocks/2330/indicators?indicators=MA20,RSI14,MACD&period=3mo"
 ```
 
 測試與檢查（不連外，以官方回應格式的樣本回放）：
@@ -182,3 +198,4 @@ Inspector CLI 會把純數字的參數值當成數字送出，例如 `stock_id=2
 - **驗證**：Zod 4，輸入與輸出都有 schema
 - **測試**：Vitest，搭配 `@modelcontextprotocol/client` 的 `InMemoryTransport`
 - **Financial Engine**：Python 3.13、FastAPI、httpx，以 uv 管理套件；測試用 pytest 與 `httpx.MockTransport`
+- **技術指標**：純 Python 實作，公式與起算方式都在程式裡，不依賴第三方指標套件；pandas 只用在測試中做交叉比對

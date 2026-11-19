@@ -6,6 +6,7 @@ import {
   stockHistoryEnvelope,
   stockInfoEnvelope,
   stockPriceEnvelope,
+  technicalIndicatorsEnvelope,
 } from '../schemas/stock.js';
 import type { EngineApi } from '../services/engineClient.js';
 import { READ_ONLY, runEngineTool } from './helpers.js';
@@ -71,5 +72,30 @@ export function registerStockTools(server: McpServer, engine: EngineApi): void {
     },
     ({ stock_id, ...query }) =>
       runEngineTool('get_institutional_flow', () => engine.getInstitutionalFlow(stock_id, query)),
+  );
+
+  server.registerTool(
+    'get_technical_indicators',
+    {
+      title: '技術指標',
+      description:
+        '計算個股或 ETF 的技術指標：MA（MA2–MA120，如 MA5、MA20、MA60）、RSI（RSI2–RSI30，如 RSI14）、MACD（12, 26, 9）。不指定指標時為 MA5、MA20、RSI14、MACD；不指定期間時為最近三個月。回傳每個指標的公式、參數、最新值與區間內每日數值，全部由程式以未還原收盤價計算，請直接引用，不要自行計算。status 不是 ok 時表示資料不足或無定義，此時不要推測數值。首次查詢需取得較長的歷史行情，可能要十幾秒。',
+      inputSchema: z.object({
+        stock_id: stockIdSchema,
+        indicators: z
+          .array(z.string().regex(/^(MA\d{1,3}|RSI\d{1,2}|MACD)$/i, '指標名稱需為 MA 加期數、RSI 加期數或 MACD'))
+          .min(1)
+          .max(8)
+          .optional()
+          .describe('例如 ["MA5", "MA20", "RSI14", "MACD"]'),
+        period: z.enum(['5d', '1mo', '3mo', '6mo', '1y']).optional().describe('從今天往回的期間；與起訖日期擇一'),
+        start_date: isoDateSchema.optional().describe('起始日 YYYY-MM-DD'),
+        end_date: isoDateSchema.optional().describe('結束日 YYYY-MM-DD，預設今天；需搭配 start_date'),
+      }),
+      outputSchema: technicalIndicatorsEnvelope,
+      annotations: READ_ONLY,
+    },
+    ({ stock_id, ...query }) =>
+      runEngineTool('get_technical_indicators', () => engine.getTechnicalIndicators(stock_id, query)),
   );
 }

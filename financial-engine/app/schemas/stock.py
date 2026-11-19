@@ -133,3 +133,36 @@ class MarketSummary(BaseModel):
     value: int | None = Field(description="市場成交金額（元）")
     transactions: int | None = Field(description="市場成交筆數")
     recent: list[IndexPoint] = Field(description="近期收盤指數，依日期由舊到新，最多 10 日")
+
+
+class IndicatorPoint(BaseModel):
+    date: date
+    value: float | None = Field(description="指標主值：MA 為均價、RSI 為 0–100、MACD 為 DIF")
+    signal: float | None = Field(default=None, description="MACD 的訊號線；其他指標為 null")
+    histogram: float | None = Field(default=None, description="MACD 的柱狀體；其他指標為 null")
+
+
+class IndicatorResult(BaseModel):
+    name: str = Field(description="指標名稱，例如 MA20、RSI14、MACD")
+    kind: Literal["SMA", "RSI", "MACD"]
+    params: dict[str, int]
+    definition: str = Field(description="計算公式與起算方式")
+    required_bars: int = Field(description="最新一日要有完整數值，至少需要的收盤價筆數")
+    available_bars: int = Field(description="實際用來計算的收盤價筆數，含查詢區間之前的暖機期")
+    status: Literal["ok", "insufficient_data", "undefined"] = Field(
+        description="ok：最新一日有完整數值；insufficient_data：資料筆數不足；"
+        "undefined：資料足夠但數學上無定義（例如期間內價格完全沒動的 RSI）"
+    )
+    latest: IndicatorPoint | None = Field(description="最新一日的數值；status 不是 ok 時為 null")
+    values: list[IndicatorPoint] = Field(description="查詢區間內每個交易日的數值，由舊到新")
+
+
+class TechnicalIndicators(BaseModel):
+    stock_id: str
+    name: str
+    market: Market
+    start_date: date
+    end_date: date
+    latest_date: date | None = Field(description="區間內最後一個有收盤價的交易日")
+    latest_close: float | None = Field(description="該日收盤價（未還原）")
+    indicators: list[IndicatorResult]

@@ -116,6 +116,51 @@ const SUMMARY = {
   warnings: [],
 };
 
+const point = (value: number | null, signal: number | null = null, histogram: number | null = null) => ({
+  date: '2026-11-17',
+  value,
+  signal,
+  histogram,
+});
+const INDICATORS = {
+  success: true,
+  data: {
+    stock_id: '2330',
+    name: '台積電',
+    market: 'TWSE',
+    start_date: '2026-11-17',
+    end_date: '2026-11-17',
+    latest_date: '2026-11-17',
+    latest_close: 2170,
+    indicators: [
+      {
+        name: 'MA5',
+        kind: 'SMA',
+        params: { window: 5 },
+        definition: '最近 5 個交易日收盤價的簡單算術平均。',
+        required_bars: 5,
+        available_bars: 120,
+        status: 'ok',
+        latest: point(2283),
+        values: [point(2283)],
+      },
+      {
+        name: 'MACD',
+        kind: 'MACD',
+        params: { fast: 12, slow: 26, signal: 9 },
+        definition: 'DIF = 收盤價 EMA12 − EMA26；…',
+        required_bars: 34,
+        available_bars: 20,
+        status: 'insufficient_data',
+        latest: null,
+        values: [point(null)],
+      },
+    ],
+  },
+  metadata: meta({ source: 'TWSE 盤後資訊', data_type: 'historical', unit: 'MA、MACD：新台幣元；RSI：0–100' }),
+  warnings: [],
+};
+
 type FakeFetch = (url: URL) => Response | Promise<Response>;
 
 const json = (status: number, body: unknown) =>
@@ -180,10 +225,16 @@ const TOOLS = [
     url: 'http://engine.test/stocks/2330/institutional-flow?start_date=2026-11-13&end_date=2026-11-17',
   },
   { name: 'get_market_summary', args: { market: 'TPEx' }, body: SUMMARY, url: 'http://engine.test/market/TPEx/summary' },
+  {
+    name: 'get_technical_indicators',
+    args: { stock_id: '2330', indicators: ['MA5', 'MACD'], period: '1mo' },
+    body: INDICATORS,
+    url: 'http://engine.test/stocks/2330/indicators?indicators=MA5&indicators=MACD&period=1mo',
+  },
 ] as const;
 
 describe('工具清單', () => {
-  it('五個工具都註冊，且各有輸入與輸出 schema、標示為唯讀', async () => {
+  it('六個工具都註冊，且各有輸入與輸出 schema、標示為唯讀', async () => {
     const { client } = await connect(() => json(200, INFO));
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(TOOLS.map((t) => t.name).sort());
@@ -296,6 +347,10 @@ describe('輸入驗證（不呼叫 Engine）', () => {
     ['get_stock_history', { stock_id: '2330', start_date: '2026/11/01' }, /start_date/],
     ['get_institutional_flow', { stock_id: '2330', end_date: '11-17' }, /end_date/],
     ['get_market_summary', { market: 'NYSE' }, /market/],
+    ['get_technical_indicators', { stock_id: '2330', indicators: ['KD9'] }, /indicators/],
+    ['get_technical_indicators', { stock_id: '2330', indicators: [] }, /indicators/],
+    ['get_technical_indicators', { stock_id: '2330', indicators: 'MA5' }, /indicators/],
+    ['get_technical_indicators', { stock_id: '2330', indicators: ['MA5&x=1'] }, /indicators/],
   ])('%s %j', async (name, args, pattern) => {
     const { client, requested } = await connect(() => json(200, INFO));
     const outcome = await outcomeOf(call(client, name, args as Record<string, unknown>));
@@ -314,6 +369,13 @@ describe('參數傳遞', () => {
       'http://engine.test/stocks/2330/history?period=3mo',
       'http://engine.test/stocks/2330/history',
     ]);
+  });
+
+  it('get_technical_indicators 不給指標時交給 Engine 用預設值', async () => {
+    const { client, requested } = await connect(() => json(200, INDICATORS));
+    const result = await call(client, 'get_technical_indicators', { stock_id: '2330' });
+    expect(result.isError).toBeFalsy();
+    expect(requested).toEqual(['http://engine.test/stocks/2330/indicators']);
   });
 
   it('get_market_summary 未指定市場時查上市', async () => {

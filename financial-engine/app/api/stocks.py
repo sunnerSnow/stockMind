@@ -2,9 +2,16 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, Request
+from pydantic import StringConstraints
 
 from app.schemas.common import STOCK_ID_PATTERN, Envelope, ErrorEnvelope
-from app.schemas.stock import InstitutionalFlow, StockHistory, StockInfo, StockPrice
+from app.schemas.stock import (
+    InstitutionalFlow,
+    StockHistory,
+    StockInfo,
+    StockPrice,
+    TechnicalIndicators,
+)
 
 router = APIRouter(prefix="/stocks", tags=["stocks"])
 
@@ -67,4 +74,32 @@ async def get_institutional_flow(
 ) -> Envelope[InstitutionalFlow]:
     return await request.app.state.institutional.get_flow(
         stock_id, start_date=start_date, end_date=end_date
+    )
+
+
+@router.get(
+    "/{stock_id}/indicators",
+    response_model=Envelope[TechnicalIndicators],
+    responses=ERRORS,
+    summary="技術指標",
+)
+async def get_technical_indicators(
+    stock_id: StockId,
+    request: Request,
+    indicators: Annotated[
+        list[Annotated[str, StringConstraints(max_length=64)]] | None,
+        Query(
+            description="指標名稱，可重複或以逗號分隔：MA2–MA120、RSI2–RSI30、MACD；"
+            "不給時為 MA5、MA20、RSI14、MACD",
+            max_length=16,
+        ),
+    ] = None,
+    period: Annotated[
+        str | None, Query(description="5d、1mo、3mo、6mo、1y；與起訖日期擇一，都不給時為 3mo")
+    ] = None,
+    start_date: Annotated[date | None, Query(description="起始日 YYYY-MM-DD")] = None,
+    end_date: Annotated[date | None, Query(description="結束日 YYYY-MM-DD，預設今天")] = None,
+) -> Envelope[TechnicalIndicators]:
+    return await request.app.state.indicators.get_indicators(
+        stock_id, indicators=indicators, period=period, start_date=start_date, end_date=end_date
     )

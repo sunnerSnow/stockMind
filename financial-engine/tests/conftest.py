@@ -4,8 +4,9 @@
 測試中的「今天」固定為 2026-11-18（週三）。
 """
 
+import math
 from collections.abc import Callable, Iterator
-from datetime import date
+from datetime import date, timedelta
 
 import httpx
 import pytest
@@ -274,6 +275,36 @@ TWSE_MONTHS = {
         ],
     ],
 }
+
+
+def synthetic_closes(count: int) -> list[float]:
+    """有漲有跌、可重現的收盤價序列，供技術指標測試使用。"""
+    return [
+        round(100 + 12 * math.sin(i / 6) + 0.05 * i + (i * 7 % 5) * 0.3, 2) for i in range(count)
+    ]
+
+
+def _weekdays(start: date, end: date) -> list[date]:
+    days, day = [], start
+    while day <= end:
+        if day.weekday() < 5:
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
+# 0050：2026-01-02 到 2026-11-17 的每個平日都有行情（指標測試需要夠長的歷史）
+ETF_DAYS = _weekdays(date(2026, 1, 2), date(2026, 11, 17))
+ETF_CLOSES = dict(zip(ETF_DAYS, synthetic_closes(len(ETF_DAYS)), strict=True))
+for _day, _close in ETF_CLOSES.items():
+    _row = [
+        f"{_day.year - 1911}/{_day.month:02d}/{_day.day:02d}",
+        "1,000,000", "100,000,000",
+        f"{_close:.2f}", f"{_close + 1:.2f}", f"{_close - 1:.2f}", f"{_close:.2f}",
+        "+0.00", "1,000", "",
+    ]  # fmt: skip
+    TWSE_MONTHS.setdefault(("0050", f"{_day.year}{_day.month:02d}01"), []).append(_row)
+
 TPEX_BAR_FIELDS = ["日 期", "成交張數", "成交仟元", "開盤", "最高", "最低", "收盤", "漲跌", "筆數"]
 TPEX_MONTHS = {
     ("6488", "2026/11/01"): [
@@ -474,7 +505,11 @@ class FakeUpstream:
 
 @pytest.fixture(autouse=True)
 def fixed_today(monkeypatch: pytest.MonkeyPatch) -> None:
-    for module in ("app.services.history", "app.services.institutional"):
+    for module in (
+        "app.services.history",
+        "app.services.institutional",
+        "app.services.indicators",
+    ):
         monkeypatch.setattr(f"{module}.taipei_today", lambda: TODAY)
 
 

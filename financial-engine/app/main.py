@@ -17,6 +17,7 @@ from app.data_providers.http import Fetcher
 from app.data_providers.tpex import TpexProvider
 from app.data_providers.twse import TwseProvider
 from app.services.history import HistoryService
+from app.services.indicators import IndicatorService
 from app.services.institutional import InstitutionalService
 from app.services.market import MarketService
 from app.services.securities import SecuritiesService
@@ -54,6 +55,7 @@ def create_app(
             app.state.history = history
             app.state.institutional = InstitutionalService(fetcher, securities, history)
             app.state.market = MarketService(fetcher, securities)
+            app.state.indicators = IndicatorService(fetcher, securities, history)
             yield
 
     app = FastAPI(title="StockMind Financial Engine", version="0.1.0", lifespan=lifespan)

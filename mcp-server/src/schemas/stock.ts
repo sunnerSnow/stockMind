@@ -131,14 +131,50 @@ export const marketSummarySchema = z.object({
     .describe('近期收盤指數，依日期由舊到新，最多 10 日'),
 });
 
+const indicatorPointSchema = z.object({
+  date: isoDate,
+  value: price.describe('指標主值：MA 為均價、RSI 為 0–100、MACD 為 DIF'),
+  signal: price.describe('MACD 的訊號線；其他指標為 null'),
+  histogram: price.describe('MACD 的柱狀體；其他指標為 null'),
+});
+
+export const technicalIndicatorsSchema = z.object({
+  stock_id: z.string(),
+  name: z.string(),
+  market: marketSchema,
+  start_date: isoDate,
+  end_date: isoDate,
+  latest_date: isoDate.nullable().describe('區間內最後一個有收盤價的交易日'),
+  latest_close: price.describe('該日收盤價（未還原）'),
+  indicators: z.array(
+    z.object({
+      name: z.string().describe('指標名稱，例如 MA20、RSI14、MACD'),
+      kind: z.enum(['SMA', 'RSI', 'MACD']),
+      params: z.record(z.string(), z.number().int()),
+      definition: z.string().describe('計算公式與起算方式'),
+      required_bars: z.number().int().describe('最新一日要有完整數值，至少需要的收盤價筆數'),
+      available_bars: z.number().int().describe('實際用來計算的收盤價筆數，含查詢區間之前的暖機期'),
+      status: z
+        .enum(['ok', 'insufficient_data', 'undefined'])
+        .describe(
+          'ok：最新一日有完整數值；insufficient_data：資料筆數不足；undefined：資料足夠但數學上無定義',
+        ),
+      latest: indicatorPointSchema.nullable().describe('最新一日的數值；status 不是 ok 時為 null'),
+      values: z.array(indicatorPointSchema).describe('查詢區間內每個交易日的數值，由舊到新'),
+    }),
+  ),
+});
+
 export const stockInfoEnvelope = envelopeSchema(stockInfoSchema);
 export const stockPriceEnvelope = envelopeSchema(stockPriceSchema);
 export const stockHistoryEnvelope = envelopeSchema(stockHistorySchema);
 export const institutionalFlowEnvelope = envelopeSchema(institutionalFlowSchema);
 export const marketSummaryEnvelope = envelopeSchema(marketSummarySchema);
+export const technicalIndicatorsEnvelope = envelopeSchema(technicalIndicatorsSchema);
 
 export type StockInfoResult = z.infer<typeof stockInfoEnvelope>;
 export type StockPriceResult = z.infer<typeof stockPriceEnvelope>;
 export type StockHistoryResult = z.infer<typeof stockHistoryEnvelope>;
 export type InstitutionalFlowResult = z.infer<typeof institutionalFlowEnvelope>;
 export type MarketSummaryResult = z.infer<typeof marketSummaryEnvelope>;
+export type TechnicalIndicatorsResult = z.infer<typeof technicalIndicatorsEnvelope>;

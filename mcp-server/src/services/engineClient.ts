@@ -1,14 +1,35 @@
 import { z } from 'zod';
-import type { ToolErrorCode } from '../tools/errors.js';
-import { stockInfoEnvelopeSchema, type StockInfoProvider, type StockInfoResult } from './stockInfo.js';
+import {
+  institutionalFlowEnvelope,
+  marketSummaryEnvelope,
+  stockHistoryEnvelope,
+  stockInfoEnvelope,
+  stockPriceEnvelope,
+  type InstitutionalFlowResult,
+  type MarketSummaryResult,
+  type StockHistoryResult,
+  type StockInfoResult,
+  type StockPriceResult,
+} from '../schemas/stock.js';
 
 export const DEFAULT_ENGINE_URL = 'http://127.0.0.1:8000';
-const DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * 必須比 Engine 最慢的查詢久：首次查一個月的三大法人要逐日向交易所取資料，
+ * 受節流限制約需一分鐘。MCP 端先逾時的話，使用者只會看到「Engine 沒有回應」。
+ */
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+export type EngineErrorCode =
+  | 'STOCK_NOT_FOUND'
+  | 'INVALID_INPUT'
+  | 'UPSTREAM_ERROR'
+  | 'ENGINE_UNAVAILABLE'
+  | 'INTERNAL_ERROR';
 
 /** 可以直接轉述給使用者的錯誤：code 與 message 都不含內部細節。 */
 export class EngineError extends Error {
   constructor(
-    public readonly code: ToolErrorCode,
+    public readonly code: EngineErrorCode,
     message: string,
   ) {
     super(message);
@@ -22,7 +43,21 @@ const engineErrorSchema = z.object({
 });
 
 /** Engine 會回、且 MCP 端願意原樣轉述的錯誤碼。其餘一律視為內部錯誤。 */
-const PASSTHROUGH_CODES = new Set<ToolErrorCode>(['STOCK_NOT_FOUND', 'UPSTREAM_ERROR']);
+const PASSTHROUGH_CODES: ReadonlySet<string> = new Set(['STOCK_NOT_FOUND', 'INVALID_INPUT', 'UPSTREAM_ERROR']);
+
+export interface DateRange {
+  start_date?: string;
+  end_date?: string;
+}
+
+/** MCP Tools 需要的 Engine 功能。測試可注入替身。 */
+export interface EngineApi {
+  getStockInfo(stockId: string): Promise<StockInfoResult>;
+  getStockPrice(stockId: string): Promise<StockPriceResult>;
+  getStockHistory(stockId: string, query: DateRange & { period?: string }): Promise<StockHistoryResult>;
+  getInstitutionalFlow(stockId: string, query: DateRange): Promise<InstitutionalFlowResult>;
+  getMarketSummary(market: string): Promise<MarketSummaryResult>;
+}
 
 export interface EngineClientOptions {
   baseUrl?: string;
@@ -42,11 +77,15 @@ export function resolveEngineUrl(raw: string | undefined): URL {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`STOCKMIND_ENGINE_URL 只支援 http 或 https：${value}`);
   }
+  // 結尾補上斜線，之後以相對路徑組網址時才會保留路徑前綴（例如 http://host/api）
+  if (!url.pathname.endsWith('/')) url.pathname += '/';
+  url.search = '';
+  url.hash = '';
   return url;
 }
 
 /** 透過 HTTP 呼叫 Financial Engine。 */
-export class EngineClient implements StockInfoProvider {
+export class EngineClient implements EngineApi {
   private readonly baseUrl: URL;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -57,12 +96,31 @@ export class EngineClient implements StockInfoProvider {
     this.fetchImpl = options.fetch ?? fetch;
   }
 
-  getStockInfo(stockId: string): Promise<StockInfoResult> {
-    return this.get(`/stocks/${encodeURIComponent(stockId)}`, stockInfoEnvelopeSchema);
+  getStockInfo(stockId: string) {
+    return this.get(['stocks', stockId], {}, stockInfoEnvelope);
   }
 
-  private async get<T>(path: string, schema: z.ZodType<T>): Promise<T> {
-    const url = new URL(path, this.baseUrl);
+  getStockPrice(stockId: string) {
+    return this.get(['stocks', stockId, 'price'], {}, stockPriceEnvelope);
+  }
+
+  getStockHistory(stockId: string, query: DateRange & { period?: string }) {
+    return this.get(['stocks', stockId, 'history'], query, stockHistoryEnvelope);
+  }
+
+  getInstitutionalFlow(stockId: string, query: DateRange) {
+    return this.get(['stocks', stockId, 'institutional-flow'], query, institutionalFlowEnvelope);
+  }
+
+  getMarketSummary(market: string) {
+    return this.get(['market', market, 'summary'], {}, marketSummaryEnvelope);
+  }
+
+  private async get<T>(segments: string[], query: object, schema: z.ZodType<T>): Promise<T> {
+    const url = new URL(segments.map(encodeURIComponent).join('/'), this.baseUrl);
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) url.searchParams.set(key, String(value));
+    }
 
     let response: Response;
     try {
@@ -72,7 +130,10 @@ export class EngineClient implements StockInfoProvider {
       });
     } catch (err) {
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-        throw new EngineError('ENGINE_UNAVAILABLE', `Financial Engine 在 ${this.timeoutMs / 1000} 秒內沒有回應，請稍後再試。`);
+        throw new EngineError(
+          'ENGINE_UNAVAILABLE',
+          `Financial Engine 在 ${this.timeoutMs / 1000} 秒內沒有回應，請稍後再試。`,
+        );
       }
       throw new EngineError(
         'ENGINE_UNAVAILABLE',
@@ -89,9 +150,8 @@ export class EngineClient implements StockInfoProvider {
 
     if (!response.ok) {
       const parsed = engineErrorSchema.safeParse(body);
-      const code = parsed.success ? (parsed.data.error.code as ToolErrorCode) : undefined;
-      if (parsed.success && code && PASSTHROUGH_CODES.has(code)) {
-        throw new EngineError(code, parsed.data.error.message);
+      if (parsed.success && PASSTHROUGH_CODES.has(parsed.data.error.code)) {
+        throw new EngineError(parsed.data.error.code as EngineErrorCode, parsed.data.error.message);
       }
       console.error(`[engine] ${url.pathname} 回 HTTP ${response.status}`, body);
       throw new EngineError('INTERNAL_ERROR', 'Financial Engine 發生未預期的錯誤，請稍後再試。');

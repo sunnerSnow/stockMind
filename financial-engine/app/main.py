@@ -9,13 +9,17 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api import stocks
+from app.api import market, stocks
 from app.core.config import Settings, load_settings
 from app.core.errors import EngineError
-from app.data_providers.base import SecuritiesProvider
+from app.data_providers.base import MarketProvider
+from app.data_providers.http import Fetcher
 from app.data_providers.tpex import TpexProvider
 from app.data_providers.twse import TwseProvider
-from app.services.stock_service import StockService
+from app.services.history import HistoryService
+from app.services.institutional import InstitutionalService
+from app.services.market import MarketService
+from app.services.securities import SecuritiesService
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,7 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 def create_app(
     *,
     settings: Settings | None = None,
-    providers: Sequence[SecuritiesProvider] | None = None,
+    providers: Sequence[MarketProvider] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """providers 與 transport 可注入，測試時不需連到真實來源。"""
@@ -43,13 +47,18 @@ def create_app(
             transport=transport,
             follow_redirects=False,
         ) as client:
-            app.state.stock_service = StockService(
-                client, providers or [TwseProvider(), TpexProvider()], settings
-            )
+            fetcher = Fetcher(client, settings)
+            securities = SecuritiesService(fetcher, providers or [TwseProvider(), TpexProvider()])
+            history = HistoryService(fetcher, securities)
+            app.state.securities = securities
+            app.state.history = history
+            app.state.institutional = InstitutionalService(fetcher, securities, history)
+            app.state.market = MarketService(fetcher, securities)
             yield
 
     app = FastAPI(title="StockMind Financial Engine", version="0.1.0", lifespan=lifespan)
     app.include_router(stocks.router)
+    app.include_router(market.router)
 
     @app.get("/health", tags=["system"], summary="健康檢查")
     async def health() -> dict[str, str]:

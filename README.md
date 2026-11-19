@@ -12,7 +12,7 @@
 |---|---|---|
 | M1 | 最小 MCP Server、`get_stock_info` | 完成 |
 | M2 | Python Financial Engine（FastAPI）、TWSE／TPEx 基本資料來源、MCP 串接 | 完成 |
-| M3 | 行情、歷史行情、三大法人、大盤概況 | 未開始 |
+| M3 | 最新行情、歷史行情、三大法人、大盤概況 | 完成 |
 | M4 | 技術指標 MA／RSI／MACD | 未開始 |
 | M5 | Resources、Prompts、Claude Desktop 整合 | 未開始 |
 | M6 | PostgreSQL、Docker、CI | 未開始 |
@@ -40,9 +40,13 @@ TWSE／TPEx 官方公開資料
 
 | Tool | 說明 | 資料來源 |
 |---|---|---|
-| `get_stock_info` | 股票／ETF 基本資料：簡稱、公司全名、上市櫃別、證券類別、產業別代碼、上市櫃日期 | TWSE OpenAPI、TPEx OpenAPI |
+| `get_stock_info` | 基本資料：簡稱、公司全名、上市櫃別、證券類別、產業別代碼、上市櫃日期 | TWSE／TPEx OpenAPI |
+| `get_stock_price` | 最近一個交易日的盤後行情：開高低收、漲跌、漲跌幅、成交量值 | TWSE／TPEx OpenAPI |
+| `get_stock_history` | 指定期間的日 K，最多 366 天 | TWSE／TPEx 盤後資訊 |
+| `get_institutional_flow` | 三大法人每日買賣超，加上累計、連續天數、方向一致性，最多 31 天 | TWSE／TPEx 盤後資訊 |
+| `get_market_summary` | 大盤概況：加權指數或櫃買指數、漲跌、近 10 日收盤 | TWSE／TPEx OpenAPI |
 
-成功回應的統一格式：
+所有 Tool 都是唯讀查詢。成功回應的統一格式：
 
 ```json
 {
@@ -50,20 +54,27 @@ TWSE／TPEx 官方公開資料
   "data": {
     "stock_id": "2330",
     "name": "台積電",
-    "full_name": "台灣積體電路製造股份有限公司",
     "market": "TWSE",
-    "security_type": "stock",
-    "industry_code": "24",
-    "listing_date": "1994-09-05"
+    "trade_date": "2026-11-17",
+    "open": 2195.0,
+    "high": 2270.0,
+    "low": 2155.0,
+    "close": 2170.0,
+    "change": -45.0,
+    "previous_close": 2215.0,
+    "change_percent": -2.03,
+    "volume": 61610981,
+    "value": 135465361736,
+    "transactions": 371462
   },
   "metadata": {
     "source": "TWSE OpenAPI",
     "data_date": "2026-11-17",
-    "retrieved_at": "2026-11-18T12:31:45+08:00",
-    "data_type": "reference",
-    "unit": null
+    "retrieved_at": "2026-11-18T16:57:58+08:00",
+    "data_type": "after_market",
+    "unit": "價格：新台幣元；volume：股；value：元"
   },
-  "warnings": []
+  "warnings": ["這是最近一個交易日的盤後資料，不是即時行情。"]
 }
 ```
 
@@ -72,7 +83,8 @@ TWSE／TPEx 官方公開資料
 | 錯誤碼 | 意義 |
 |---|---|
 | `STOCK_NOT_FOUND` | 上市、上櫃清單都查不到這個代號 |
-| `UPSTREAM_ERROR` | 官方資料來源逾時或異常；不代表股票不存在 |
+| `INVALID_INPUT` | 日期範圍矛盾、超出上限或是未來的日期 |
+| `UPSTREAM_ERROR` | 官方資料來源逾時、異常或格式改變；不代表查詢的對象不存在 |
 | `ENGINE_UNAVAILABLE` | 連不到 Financial Engine，通常是服務沒啟動 |
 | `INTERNAL_ERROR` | 其他未預期的錯誤，細節只寫在 log |
 
@@ -82,10 +94,34 @@ TWSE／TPEx 官方公開資料
 
 ### 資料說明
 
-- 證券清單合併自「當日行情」與「公司基本資料」兩份官方資料：前者含 ETF，後者才有產業別與上市櫃日期。
+**單位與時間**
+
+- 出了 Engine 之後單位一律是：價格為新台幣元、成交量為股、成交金額為元、法人買賣超為股。上櫃歷史資料的來源單位是張與仟元，換算後精度為 1,000 股、1,000 元。
+- 行情都是盤後資料（`data_type: after_market`），沒有即時或盤中報價。各來源收盤後更新的時間不同，以 `data_date` 為準。
+- `retrieved_at` 是實際向官方來源擷取的時間，不是查詢時間。
+- 歷史價格是未還原股價，除權息、分割前後不能直接比較。
+
+**由程式計算的數值**
+
+- `previous_close` = `close` - `change`；`change_percent` = `change` ÷ `previous_close` × 100，四捨五入到小數第二位。
+- 三大法人的 `foreign` 含外資自營商，`dealer` 為自行買賣與避險合計。
+- `cumulative_net` 是期間內有資料日子的買賣超加總。
+- `streaks` 是截至最近一個有資料的交易日，同方向連續的天數；遇到持平或沒資料的日子就停止。
+- `latest_alignment` 是最近一日外資、投信、自營商是否同為買超或同為賣超。
+
+**沒有資料時**
+
+- 沒有成交、來源未提供、或無法比較（例如除權息日的漲跌）的欄位是 `null`，不會填 0 或估計值，並在 `warnings` 說明。
+- 三大法人報表只列當日有法人交易的證券。某交易日未列時，該日 `reported` 為 `false`、數值為 `null`，不計入累計與連續天數。
+- 期間最後幾天的法人資料尚未公布時，那幾天不列入，並在 `warnings` 註明日期。夾在中間的交易日若來源沒有資料，該日保留為 `null`，連續天數算到這裡就停止。
 - ETF 沒有公司基本資料，`full_name`、`industry_code`、`listing_date` 為 `null`。
-- 代號不在公司基本資料內、也不是 `00` 開頭時，`security_type` 為 `other`，並附警告。
-- 清單在記憶體快取 6 小時；`retrieved_at` 是實際向官方來源擷取的時間，不是查詢時間。
+- 來源的欄位名稱或數量與預期不符時回 `UPSTREAM_ERROR`，不會照舊的欄位位置硬解。
+
+**快取與速度**
+
+- 當日行情、指數在記憶體快取 5 分鐘，公司基本資料 6 小時。
+- 已經結束的月份、已經過去的交易日不會再變，會另存到 `financial-engine/.cache`，重啟後仍可用。來源回「查無資料」時不存磁碟，避免暫時性的缺漏被永久記住。
+- 對交易所網站的請求有節流（預設間隔 1.5 秒）。歷史行情一次抓一個月、三大法人一次抓一天，所以首次查詢較慢：一年的日 K 約 20 秒，一個月的三大法人約一分鐘；之後走快取，不到一秒。
 - 其中一個市場的來源失敗時，另一個市場仍可查；但查不到的代號會回 `UPSTREAM_ERROR` 而不是 `STOCK_NOT_FOUND`。
 
 ## 本機開發
@@ -105,6 +141,10 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```bash
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/stocks/2330
+curl http://127.0.0.1:8000/stocks/2330/price
+curl "http://127.0.0.1:8000/stocks/2330/history?period=3mo"
+curl "http://127.0.0.1:8000/stocks/2330/institutional-flow?start_date=2026-11-02&end_date=2026-11-17"
+curl http://127.0.0.1:8000/market/TWSE/summary
 ```
 
 測試與檢查（不連外，以官方回應格式的樣本回放）：
@@ -125,13 +165,13 @@ npm run build
 npm run inspect   # 建置後開啟 MCP Inspector 網頁介面
 ```
 
-Engine 不在預設位址時，設定環境變數 `STOCKMIND_ENGINE_URL`（見 [.env.example](.env.example)）。
+Engine 不在預設位址時，設定環境變數 `STOCKMIND_ENGINE_URL`。所有可調整的環境變數列在 [.env.example](.env.example)。
 
 用 Inspector 的 CLI 模式快速驗證：
 
 ```bash
 npx @modelcontextprotocol/inspector@latest --cli node dist/index.js --method tools/list
-npx @modelcontextprotocol/inspector@latest --cli node dist/index.js   --method tools/call --tool-name get_stock_info --tool-arg stock_id=0050
+npx @modelcontextprotocol/inspector@latest --cli node dist/index.js --method tools/call --tool-name get_stock_price --tool-arg stock_id=0050
 ```
 
 Inspector CLI 會把純數字的參數值當成數字送出，例如 `stock_id=2330` 會被驗證擋下；請改寫成 `--tool-arg 'stock_id="2330"'`，或直接用網頁介面測試。

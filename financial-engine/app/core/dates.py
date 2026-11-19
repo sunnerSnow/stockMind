@@ -38,3 +38,20 @@ def parse_western_compact(value: str | None) -> date | None:
         return date(int(text[:4]), int(text[4:6]), int(text[6:]))
     except ValueError:
         return None
+
+
+def parse_roc_slash(value: str | None) -> date | None:
+    """民國年斜線格式 '115/11/16' → 2026-11-16。"""
+    if not value:
+        return None
+    parts = value.strip().split("/")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    try:
+        return date(int(parts[0]) + 1911, int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+
+
+def taipei_today() -> date:
+    return taipei_now().date()

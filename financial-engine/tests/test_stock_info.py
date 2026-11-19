@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.data_providers import tpex, twse
+from tests.conftest import DEFAULT_ROUTES
 
 
 def test_health(client):
@@ -70,9 +71,10 @@ def test_unknown_stock_is_404(client):
     }
 
 
-@pytest.mark.parametrize("bad", ["abc", "23", "1234567", "2330a", "2330%20"])
-def test_malformed_stock_id_is_422(client, upstream, bad):
-    response = client.get(f"/stocks/{bad}")
+@pytest.mark.parametrize("bad", ["abc", "23", "1234567", "2330a", "2330%20", "2330%0A"])
+@pytest.mark.parametrize("suffix", ["", "/price", "/history", "/institutional-flow"])
+def test_malformed_stock_id_is_422(client, upstream, bad, suffix):
+    response = client.get(f"/stocks/{bad}{suffix}")
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_INPUT"
     assert upstream.total_calls() == 0  # 格式錯誤不該打到資料來源
@@ -81,6 +83,7 @@ def test_malformed_stock_id_is_422(client, upstream, bad):
 def test_securities_are_cached(client, upstream):
     for stock_id in ("2330", "6488", "0050", "9999"):
         client.get(f"/stocks/{stock_id}")
+    client.get("/stocks/2330/price")
     assert upstream.calls == {
         twse.QUOTES_URL: 1,
         twse.PROFILES_URL: 1,
@@ -96,7 +99,7 @@ def test_transient_failure_is_retried(client, upstream):
         attempts["n"] += 1
         if attempts["n"] < 3:
             return httpx.Response(503)
-        return httpx.Response(200, json=upstream_default(twse.QUOTES_URL))
+        return httpx.Response(200, json=DEFAULT_ROUTES[twse.QUOTES_URL])
 
     upstream.routes[twse.QUOTES_URL] = flaky
     assert client.get("/stocks/2330").status_code == 200
@@ -129,7 +132,7 @@ def test_not_found_is_not_claimed_when_a_source_is_down(client, upstream):
 def test_failed_fetch_is_not_cached(client, upstream):
     upstream.routes[tpex.QUOTES_URL] = httpx.ConnectError("refused")
     assert client.get("/stocks/6488").status_code == 502
-    upstream.routes[tpex.QUOTES_URL] = upstream_default(tpex.QUOTES_URL)
+    upstream.routes[tpex.QUOTES_URL] = DEFAULT_ROUTES[tpex.QUOTES_URL]
     assert client.get("/stocks/6488").status_code == 200
 
 
@@ -148,17 +151,11 @@ def test_unexpected_payload_shape_is_upstream_error(client, upstream, payload):
 
 def test_non_json_response_is_upstream_error(client, upstream):
     upstream.routes[twse.QUOTES_URL] = lambda _r: httpx.Response(200, text="<html>維護中</html>")
-    response = client.get("/stocks/2330")
-    assert response.status_code == 502
+    assert client.get("/stocks/2330").status_code == 502
 
 
-def test_client_error_from_source_is_not_retried(client, upstream):
-    upstream.routes[twse.QUOTES_URL] = lambda _r: httpx.Response(404)
+@pytest.mark.parametrize("status", [302, 404])
+def test_redirect_or_client_error_from_source_is_not_retried(client, upstream, status):
+    upstream.routes[twse.QUOTES_URL] = lambda _r: httpx.Response(status)
     assert client.get("/stocks/2330").status_code == 502
     assert upstream.calls[twse.QUOTES_URL] == 1
-
-
-def upstream_default(url: str):
-    from tests.conftest import DEFAULT_ROUTES
-
-    return DEFAULT_ROUTES[url]

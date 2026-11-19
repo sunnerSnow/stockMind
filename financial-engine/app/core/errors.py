@@ -28,3 +28,10 @@ class UpstreamError(EngineError):
     def __init__(self, source: str, detail: str):
         super().__init__(f"資料來源 {source} 目前無法取得資料：{detail}")
         self.source = source
+
+
+class InvalidRangeError(EngineError):
+    """查詢參數彼此矛盾或超出上限。"""
+
+    code = "INVALID_INPUT"
+    http_status = 422

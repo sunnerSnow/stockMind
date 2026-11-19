@@ -20,3 +20,6 @@ __pycache__/
 Thumbs.db
 *.log
 .claude/settings.local.json
+
+# Financial Engine 的磁碟快取
+.cache/

@@ -12,6 +12,9 @@ export const stockIdSchema = z
 
 export const marketSchema = z.enum(['TWSE', 'TPEx']).describe('TWSE＝上市，TPEx＝上櫃');
 
+/** 只驗格式；日期是否合理（順序、範圍上限、是否為未來）由 Engine 判斷。 */
+export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式需為 YYYY-MM-DD');
+
 export const dataTypeSchema = z
   .enum(['reference', 'historical', 'delayed', 'intraday', 'after_market'])
   .describe('資料性質；reference 表示基本資料這類非行情資料');
